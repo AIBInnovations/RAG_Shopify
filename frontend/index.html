@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Shopify AI Chatbot</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <div class="brand-selector">
+        <h2>Select Brand Store Context</h2>
+        <button onclick="startSession('miloe')">Miloe (Bath & Body)</button>
+        <button onclick="startSession('cristello')">Cristello (Skincare)</button>
+    </div>
+
+    <div id="chat-widget" class="chat-widget hidden">
+        
+        <div class="chat-header">
+            <div class="header-info">
+                <span class="brand-name" id="brand-title">AI Support</span>
+                <span class="status-text"><div class="status-dot"></div> Online</span>
+            </div>
+            <button class="close-btn" onclick="closeChat()">×</button>
+        </div>
+
+        <div id="chat-messages" class="chat-messages">
+            </div>
+
+        <div class="chat-input-area">
+            <input type="text" id="user-input" placeholder="Ask about our products..." onkeypress="handleKeyPress(event)">
+            <button onclick="sendMessage()" aria-label="Send message">
+                <svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"></path></svg>
+            </button>
+        </div>
+    </div>
+
+    <script src="script.js"></script>
+</body>
+</html>
