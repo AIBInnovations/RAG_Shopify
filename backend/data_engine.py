@@ -2,7 +2,7 @@ import pandas as pd
 from bs4 import BeautifulSoup
 import os
 import re
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from .models import ProductContext, ProductVariant
 from .shopify_client import ShopifyClient
 
@@ -11,18 +11,25 @@ class MultiTenantDataEngine:
         self.brand_datasets: Dict[str, pd.DataFrame] = {}
         self.shopify_clients: Dict[str, ShopifyClient] = {}
         self.live_cache: Dict[str, List[ProductContext]] = {}
+        self.shop_info_cache: Dict[str, Dict[str, Any]] = {} # New Cache for Brand Details
         self.column_maps: Dict[str, Dict[str, str]] = {}
         
         self.brand_metadata = {
-            "miloe": {"file": "data/products_export_1.csv", "domain": "miloe.in"},
-            "cristello": {
-                "file": "data/products_export_2.csv", 
-                "domain": "cristello.in",
-                "api_env_key": "CRISTELLO_ACCESS_TOKEN", 
-                "shop_domain_env": "CRISTELLO_SHOPIFY_DOMAIN"
-            }
-        }
-        
+    "miloe": {
+        "file": "data/products_export_1.csv",
+        "domain": "miloe.in",
+        "api_env_key": "MILOE_ACCESS_TOKEN", 
+        "shop_domain_env": "MILOE_SHOPIFY_DOMAIN"
+    },  # ✅ MISSING COMMA FIXED
+    
+    "cristello": {
+        "file": "data/products_export_2.csv", 
+        "domain": "cristello.in",
+        "api_env_key": "CRISTELLO_ACCESS_TOKEN", 
+        "shop_domain_env": "CRISTELLO_SHOPIFY_DOMAIN"
+    }
+}
+
         self.CONTEXT_INTENTS = {'ingredients', 'description', 'price', 'cost', 'details', 'tell me more', 'specs', 'info'}
         self.PROMO_INTENTS = {'sale', 'offers', 'discounts', 'deals', 'promotion', 'cheap', 'save'}
         self.STOP_WORDS = {'i', 'want', 'need', 'to', 'buy', 'get', 'looking', 'for', 'show', 'me', 'the', 'a', 'an', 'only', 'just', 'with', 'in', 'products', 'product', 'is', 'are', 'there', 'any', 'do', 'you', 'have'}
@@ -39,23 +46,45 @@ class MultiTenantDataEngine:
             api_key = os.getenv(meta.get("api_env_key", ""))
             domain = os.getenv(meta.get("shop_domain_env", ""))
             
+            # API Initialization
             if api_key and domain:
                 try:
                     print(f"🔌 Connecting to Shopify Live API for {brand}...")
                     client = ShopifyClient(domain, api_key)
+                    
+                    # 1. Fetch Products
                     products = client.fetch_all_products()
+                    
+                    # 2. Fetch Shop Info (Contact, Name, etc.)
+                    shop_info = client.fetch_shop_details()
+                    
                     if products:
                         self.shopify_clients[brand] = client
                         self.live_cache[brand] = products
+                        self.shop_info_cache[brand] = shop_info
                         print(f"✨ {brand} is running in TRUE LIVE mode ({len(products)} products).")
+                        print(f"   ℹ️  Store Contact: {shop_info.get('email')}")
                         continue 
                 except Exception as e:
                     print(f"⚠️ API Init Failed for {brand}: {e}")
 
+            # CSV Initialization
             if os.path.exists(meta['file']):
                 print(f"📂 Loading CSV fallback for {brand}...")
                 self._load_csv(brand, meta['file'])
+                # Mock shop info for CSV brands if needed
+                self.shop_info_cache[brand] = {
+                    "name": brand.capitalize(),
+                    "email": "Not specified (CSV Mode)",
+                    "domain": meta['domain']
+                }
 
+    def get_shop_details(self, brand_id: str) -> Dict[str, Any]:
+        """Returns cached shop details (email, phone, etc)"""
+        return self.shop_info_cache.get(brand_id, {})
+
+    # ... [Rest of the file: _load_csv, _clean_html, search_products, etc. remains UNCHANGED] ...
+    # (Reuse the robust search logic from the previous step)
     def _load_csv(self, brand, filepath):
         try:
             df = pd.read_csv(filepath, encoding='utf-8-sig', dtype=str).fillna("")
@@ -94,6 +123,7 @@ class MultiTenantDataEngine:
         
         individual = [p for p in products if not self._is_kit(p.title)]
         selected = (individual + products)[:limit]
+        for p in selected: p.match_quality = "fallback"
         return selected
 
     def _get_sale_products(self, brand_id: str, limit: int = 5) -> List[ProductContext]:
@@ -110,14 +140,10 @@ class MultiTenantDataEngine:
 
     def search_products(self, brand_id: str, query: str, last_handle: Optional[str] = None) -> List[ProductContext]:
         raw_query = query.lower().strip()
-        
-        # 1. SALES
         if any(k in raw_query for k in self.PROMO_INTENTS):
             results = self._get_sale_products(brand_id)
             for p in results: p.match_quality = "direct"
             return results
-
-        # 2. CONTEXT (Handle follow-up like "price" or "ingredients")
         if last_handle and any(k in raw_query for k in self.CONTEXT_INTENTS) and len(raw_query.split()) < 6:
             if brand_id in self.live_cache:
                 p = next((x for x in self.live_cache[brand_id] if x.handle == last_handle), None)
@@ -129,28 +155,19 @@ class MultiTenantDataEngine:
                 if p: 
                     p.match_quality = "direct"
                     return [p]
-
-        # 3. CATALOG INTENT (Crucial Fix: Increased length limit & added specific phrases)
         generic_keywords = ['products', 'catalog', 'list', 'show me', 'what do you have', 'collection', 'offer']
-        # If the query is just a generic ask like "what products do you offer" (5 words), catch it here.
         if (any(k in raw_query for k in generic_keywords) and len(raw_query.split()) < 10) or raw_query in ["products", "all products"]:
             results = self._get_featured_products(brand_id)
-            for p in results: p.match_quality = "catalog" # Explicitly mark as Catalog Request
+            for p in results: p.match_quality = "catalog"
             return results
-
-        # 4. KEYWORD SEARCH
         tokens = [w for w in raw_query.split() if w not in self.STOP_WORDS and w not in self.CONTEXT_INTENTS]
         search_terms = self._expand_query(tokens)
         cleaned_query = "".join(tokens)
-        
-        # If stripping stop words leaves nothing (e.g. user typed just "I want"), default to catalog
         if not cleaned_query: 
             results = self._get_featured_products(brand_id)
             for p in results: p.match_quality = "catalog"
             return results
-
         results = []
-        # API Search
         if brand_id in self.live_cache:
             candidates = []
             for p in self.live_cache[brand_id]:
@@ -163,8 +180,6 @@ class MultiTenantDataEngine:
                 if score > 0: candidates.append((score, p))
             candidates.sort(key=lambda x: x[0], reverse=True)
             results = [x[1] for x in candidates]
-
-        # CSV Search
         else:
             df = self.brand_datasets.get(brand_id)
             if df is not None:
@@ -178,18 +193,14 @@ class MultiTenantDataEngine:
                     for handle in matches['Handle'].head(5):
                         p = self.get_product_by_handle_csv(brand_id, handle)
                         if p: results.append(p)
-
-        # 5. HANDLE RESULTS
         if results:
             for p in results: p.match_quality = "direct"
             if not self._is_kit(raw_query):
                 results.sort(key=lambda p: self._is_kit(p.title))
             return results[:4]
-            
         else:
-            # FALLBACK
             fallback_results = self._get_featured_products(brand_id)
-            for p in fallback_results: p.match_quality = "fallback" # Mark as Fallback so LLM knows to apologize
+            for p in fallback_results: p.match_quality = "fallback"
             return fallback_results
 
     def _is_kit(self, title: str) -> bool:
