@@ -34,12 +34,21 @@ class LLMGateway:
             context_products, query
         )
 
-        # 2. Determine Interaction State
-        match_type = "direct"
+        # 2. Match Quality & Search Status
+        match_type = "none"
+        search_status = "NO_PRODUCTS_FOUND"
+
         if sorted_products:
             match_type = sorted_products[0].match_quality  # direct / catalog / fallback
 
-        # 3. Build PRODUCT DATA block
+            if match_type == "direct":
+                search_status = "DIRECT_MATCH"
+            elif match_type == "catalog":
+                search_status = "CATALOG_REQUEST"
+            elif match_type == "fallback":
+                search_status = "NO_DIRECT_MATCH (Fallback Items)"
+
+        # 3. PRODUCT DATA Block
         product_text = ""
         if not sorted_products:
             product_text = "NO MATCHING PRODUCTS FOUND IN CATALOG."
@@ -50,86 +59,89 @@ class LLMGateway:
                 tags_str = ", ".join(p.tags[:5])
 
                 product_text += f"""
-                ---
-                PRODUCT: {p.title}
-                URL: {p.url}
-                PRICE: {p.price_range} {sale_tag}
-                STOCK: {stock_status}
-                TAGS: {tags_str}
-                DETAILS: {p.description[:700]}
-                ---
-                """
+---
+PRODUCT: {p.title}
+URL: {p.url}
+PRICE: {p.price_range} {sale_tag}
+STOCK: {stock_status}
+TAGS: {tags_str}
+DETAILS: {p.description[:700]}
+---
+"""
 
-        # 4. Intent-based Instruction
-        state_instruction = ""
+        # 4. Intent Instruction
         if match_type == "catalog":
             state_instruction = (
-                "USER INTENT: Browsing catalog.\n"
-                "ACTION: Enthusiastically recommend the top products below."
+                "USER INTENT: Browsing the catalog.\n"
+                "ACTION: Recommend products enthusiastically."
             )
         elif match_type == "fallback":
             state_instruction = (
                 f"USER INTENT: Search failed for '{query}'.\n"
-                "ACTION: Politely explain no exact match and suggest popular products."
+                "ACTION: Apologize briefly and suggest popular alternatives."
+            )
+        elif match_type == "direct":
+            state_instruction = (
+                "USER INTENT: Specific product inquiry.\n"
+                "ACTION: Answer strictly using PRODUCT DATA."
             )
         else:
             state_instruction = (
-                "USER INTENT: Specific product question.\n"
-                "ACTION: Answer accurately using PRODUCT DATA only."
+                "USER INTENT: No product intent detected.\n"
+                "ACTION: Respond naturally without forcing products."
             )
 
         # 5. Off-topic / Competitor Guard
         off_topic_instruction = ""
         if BusinessRules.is_off_topic_query(query):
             off_topic_instruction = f"""
-            🚨 OFF-TOPIC DETECTED
-            ACTION: Refuse politely.
-            RESPONSE:
-            "I am the AI assistant for {brand_name} only.
-            I cannot provide information about other brands, companies, or platforms."
-            """
+🚨 OFF-TOPIC QUERY DETECTED
+ACTION: Politely refuse.
+
+RESPONSE TEMPLATE:
+"I am the AI assistant for {brand_name} only.
+I cannot provide information about other brands, platforms, or unrelated topics."
+"""
 
         # 6. Shop Context
         shop_context = f"""
-        BRAND DETAILS:
-        - Support Email: {shop_info.get('email', 'Check website')}
-        - Phone: {shop_info.get('phone', 'Not listed')}
-        - Domain: {shop_info.get('domain', '')}
-        - Currency: {shop_info.get('currency', 'INR')}
-        """
+BRAND DETAILS:
+- Support Email: {shop_info.get('email', 'Check website')}
+- Phone: {shop_info.get('phone', 'Not listed')}
+- Domain: {shop_info.get('domain', '')}
+- Currency: {shop_info.get('currency', 'INR')}
+"""
 
-        # 7. SYSTEM PROMPT (Merged)
+        # 7. SYSTEM PROMPT (Unified Intelligence + Safety)
         system_prompt = f"""
-        You are the official Product Support AI exclusively for the brand '{brand_name}'.
+You are the official AI Product Assistant for the brand '{brand_name}'.
 
-        🔴 NON-NEGOTIABLE RULES:
-        1. BRAND ISOLATION: You ONLY know '{brand_name}'. Never mention competitors or marketplaces.
-        2. SOURCE OF TRUTH: Answer strictly from PRODUCT DATA below.
-           If data is missing, say: "I don't have that information."
-        3. NO HALLUCINATION: Never guess.
-        4. LINKS: Always use [View Product](URL). Never show raw URLs.
-        5. MEDICAL SAFETY: If a medical condition is mentioned, say:
-           "This is a cosmetic product and is not intended to treat medical conditions."
+🔴 NON-NEGOTIABLE RULES:
+1. BRAND ISOLATION: You ONLY know '{brand_name}'. Never mention competitors.
+2. SOURCE OF TRUTH: Use PRODUCT DATA only. If missing, say "I don't have that information."
+3. NO HALLUCINATION: Never guess.
+4. LINKS: Always use [View Product](URL). Never show raw URLs.
+5. MEDICAL SAFETY: If a medical condition is mentioned, say:
+   "This is a cosmetic product and is not intended to treat medical conditions."
 
-        🟢 CONVERSATION RULES:
-        - Be helpful, professional, concise.
-        - Guide the user if no product matches.
-        - Recommend enthusiastically when appropriate.
+🟢 CONVERSATION INTELLIGENCE:
+- Greetings & small talk → respond politely, no product push.
+- General questions (shipping, support) → use BRAND DETAILS.
+- Product questions → follow CURRENT SITUATION logic.
 
-        🔵 SHOP SUPPORT:
-        - For refunds/support/contact, use BRAND DETAILS only.
+🔵 SEARCH ENGINE STATUS:
+{search_status}
 
-        {shop_context}
+{shop_context}
 
-        🔵 CONTEXT:
-        {off_topic_instruction}
+{off_topic_instruction}
 
-        CURRENT SITUATION:
-        {state_instruction}
+CURRENT SITUATION:
+{state_instruction}
 
-        PRODUCT DATA (Single Source of Truth):
-        {product_text}
-        """
+PRODUCT DATA (Single Source of Truth):
+{product_text}
+"""
 
         # 8. Message Assembly
         messages = [{"role": "system", "content": system_prompt}]
@@ -137,14 +149,14 @@ class LLMGateway:
             messages.append(msg)
         messages.append({"role": "user", "content": query})
 
-        # 9. LLM Call with Fallback
+        # 9. LLM Call with Cascade Fallback
         last_error = None
         for model in self.model_cascade:
             try:
                 chat_completion = self.client.chat.completions.create(
                     model=model,
                     messages=messages,
-                    temperature=0.0,
+                    temperature=0.1,
                     max_tokens=600
                 )
                 return chat_completion.choices[0].message.content
