@@ -40,22 +40,25 @@ async def chat(request: ChatRequest):
     brand_id = session['brand_id']
     query = request.message
 
-    # 1. RETRIEVE CONTEXT (Last discussed product)
+    # 1. RETRIEVE CONTEXT
     last_handle = session_manager.get_context_handle(request.session_id)
+    
+    # 2. RETRIEVE SHOP INFO (New!)
+    shop_info = data_engine.get_shop_details(brand_id)
 
-    # 2. SMART SEARCH (With context)
+    # 3. SMART SEARCH
     relevant_products = data_engine.search_products(brand_id, query, last_handle)
 
-    # 3. Update Context (If we found a new direct match)
     if relevant_products and relevant_products[0].match_quality == "direct":
         session_manager.update_context(request.session_id, relevant_products[0].handle)
 
-    # 4. LLM Generation
+    # 4. LLM Generation (Pass shop_info now)
     response_text = llm_gateway.generate_response(
         query=query,
         context_products=relevant_products,
         history=session['history'],
-        brand_name=brand_id.capitalize()
+        brand_name=brand_id.capitalize(),
+        shop_info=shop_info # <--- PASS THIS
     )
 
     session_manager.add_interaction(request.session_id, "user", query)
