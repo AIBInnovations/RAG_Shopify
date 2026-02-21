@@ -1,5 +1,7 @@
 let sessionId = null;
-const API_URL = "http://localhost:8000";
+const API_URL = window.location.hostname === "localhost"
+    ? "http://localhost:8000"
+    : "https://rag-shopify-a3ho.onrender.com";
 
 async function startSession(brandId) {
     try {
