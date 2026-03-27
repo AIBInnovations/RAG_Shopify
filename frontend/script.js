@@ -1,4 +1,6 @@
 let sessionId = null;
+let currentBrand = null;
+
 const API_URL = window.location.hostname === "localhost"
     ? "http://localhost:8000"
     : "https://rag-shopify-a3ho.onrender.com";
@@ -12,19 +14,19 @@ async function startSession(brandId) {
         });
         const data = await response.json();
         sessionId = data.session_id;
-        
-        // UI Transitions
-        document.querySelector('.brand-selector').classList.add('hidden');
-        const chatWidget = document.querySelector('#chat-widget');
+        currentBrand = brandId;
+
+        document.getElementById('brand-selector').classList.add('hidden');
+        const chatWidget = document.getElementById('chat-widget');
         chatWidget.classList.remove('hidden');
-        
-        // Update Header
+        chatWidget.classList.add(`brand-${brandId}`);
+
         document.getElementById('brand-title').innerText = brandId.charAt(0).toUpperCase() + brandId.slice(1);
-        
-        // Initial Greeting
+        document.getElementById('header-avatar').innerText = brandId.charAt(0).toUpperCase();
+
         setTimeout(() => {
-            addMessage("bot", `Hello! I am your ${brandId} AI assistant. Ask me about products, ingredients, or availability.`);
-        }, 500); // Small delay for effect
+            addMessage("bot", `Hello! I am your ${brandId.charAt(0).toUpperCase() + brandId.slice(1)} AI assistant. Ask me about products, ingredients, or availability.`);
+        }, 400);
 
     } catch (error) {
         alert("Failed to connect to backend. Is it running?");
@@ -37,27 +39,20 @@ async function sendMessage() {
     const message = input.value.trim();
     if (!message) return;
 
-    // 1. Add User Message immediately
     addMessage("user", message);
     input.value = "";
     input.focus();
 
-    // 2. Add Typing Indicator
     const typingId = addTypingIndicator();
 
     try {
-        // 3. API Call
         const response = await fetch(`${API_URL}/chat`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ session_id: sessionId, message: message })
         });
         const data = await response.json();
-        
-        // 4. Remove Typing Indicator
         removeMessage(typingId);
-
-        // 5. Add Bot Response
         addMessage("bot", data.response);
 
     } catch (error) {
@@ -69,62 +64,78 @@ async function sendMessage() {
 
 function addMessage(role, text) {
     const messagesDiv = document.getElementById('chat-messages');
-    const div = document.createElement('div');
-    div.className = `message ${role}`;
-    
-    // --- Markdown Parsing ---
+
+    const row = document.createElement('div');
+    row.className = `message-row ${role}`;
+
+    if (role === "bot") {
+        const avatar = document.createElement('div');
+        avatar.className = `bot-avatar ${currentBrand}-bg`;
+        avatar.innerText = currentBrand ? currentBrand.charAt(0).toUpperCase() : 'A';
+        row.appendChild(avatar);
+    }
+
+    const bubble = document.createElement('div');
+    bubble.className = `message ${role}`;
+
     let formattedText = text;
 
-    // Links: [Text](URL) -> Pill Button
+    // Links: [Text](URL) -> styled button
     formattedText = formattedText.replace(/\[([^\]]+)\]\(([^)]+)\)/g, (match, linkText, url) => {
         const displayLabel = linkText.trim().startsWith('http') ? 'View Product' : linkText;
         return `<a href="${url}" target="_blank" class="product-link">${displayLabel}</a>`;
     });
 
-    // Bold: **Text**
+    // Bold
     formattedText = formattedText.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
 
-    // Lists: 1. Item -> New line + Bold Item
+    // Numbered lists
     formattedText = formattedText.replace(/(\d+\.)\s/g, '<br><b>$1</b> ');
-    
-    // Bullets: * Item -> New line + Bullet
+
+    // Bullets
     formattedText = formattedText.replace(/^\*\s/gm, '<br>• ');
 
     // Newlines
     formattedText = formattedText.replace(/\n/g, '<br>');
-    
-    // Clean start
+
+    // Clean leading break
     if (formattedText.startsWith('<br>')) formattedText = formattedText.substring(4);
 
-    div.innerHTML = formattedText;
-    
+    bubble.innerHTML = formattedText;
+
     const id = Date.now();
-    div.setAttribute("data-id", id);
-    messagesDiv.appendChild(div);
+    row.setAttribute("data-id", id);
+    row.appendChild(bubble);
+    messagesDiv.appendChild(row);
     scrollToBottom();
     return id;
 }
 
 function addTypingIndicator() {
     const messagesDiv = document.getElementById('chat-messages');
-    const div = document.createElement('div');
-    div.className = `message bot typing`;
-    div.innerHTML = `
-        <div class="typing-dots">
-            <div class="dot"></div>
-            <div class="dot"></div>
-            <div class="dot"></div>
-        </div>
-    `;
+
+    const row = document.createElement('div');
+    row.className = 'message-row bot';
+
+    const avatar = document.createElement('div');
+    avatar.className = `bot-avatar ${currentBrand}-bg`;
+    avatar.innerText = currentBrand ? currentBrand.charAt(0).toUpperCase() : 'A';
+    row.appendChild(avatar);
+
+    const bubble = document.createElement('div');
+    bubble.className = 'message bot';
+    bubble.innerHTML = `<div class="typing-dots"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>`;
+    row.appendChild(bubble);
+
     const id = "typing-" + Date.now();
-    div.setAttribute("data-id", id);
-    messagesDiv.appendChild(div);
+    row.setAttribute("data-id", id);
+    messagesDiv.appendChild(row);
     scrollToBottom();
     return id;
 }
 
 function removeMessage(id) {
-    const msg = document.querySelector(`.message[data-id="${id}"]`);
+    const msg = document.querySelector(`.message-row[data-id="${id}"]`);
     if (msg) msg.remove();
 }
 
@@ -138,5 +149,5 @@ function handleKeyPress(e) {
 }
 
 function closeChat() {
-    location.reload(); 
+    location.reload();
 }
